@@ -67,6 +67,10 @@ void buf_copy(buf_t *dst, buf_t *src)
     memcpy(dst->payload, src->payload, BUF_MAX_LEN);
 }
 
+
+#define swap16(x) ((((x)&0xFF) << 8) | (((x) >> 8) & 0xFF)) //为16位数据交换大小端
+
+
 /**
  * @brief 计算16位校验和
  *        1. 把首部看成以 16 位为单位的数字组成，依次进行二进制求和
@@ -77,11 +81,34 @@ void buf_copy(buf_t *dst, buf_t *src)
  *        3. 将上述的和取反，即得到校验和。  
  *        
  * @param buf 要计算的数据包
- * @param len 要计算的长度
+ * @param len 要计算的长度                 // 字节数
  * @return uint16_t 校验和
  */
 uint16_t checksum16(uint16_t *buf, int len)
 {
     // TODO
+
+    uint32_t result = 0;
+    uint16_t x, y;
+
+    // len == 20 即20个字节
+    
+    for(int i = 0; i < len/2; i++){
+        x = swap16(buf[i]);         // 大小端！！！
+        result += x;
+    }
+
+    x = (uint16_t)(result >> 16);   // 高16位
+    y = (uint16_t)(result & 0xffff);  // 低16位     条件&&      位& !!!
+
+    result = (uint32_t)x + y;
+
+    x = (uint16_t)(result >> 16);   // 高16位
+    y = (uint16_t)(result & 0xffff);  // 低16位
+
+    uint16_t ans = x + y;       // 求和
+    ans = ~ans;                // 取反
+
+    return ans;
         
 }

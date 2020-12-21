@@ -25,6 +25,53 @@ void ip_in(buf_t *buf)
 {
     // TODO 
 
+    ip_hdr_t *ip = (ip_hdr_t *)buf->data;   // 数据部分 开始指针  buf是收到的数据包：大端存储
+    
+    if(ip->version != IP_VERSION_4
+        || ip->hdr_len > 6 
+        || ip->hdr_len < 5){                 // 待补充
+
+        return;
+    }
+
+    uint16_t check = swap16(ip->hdr_checksum);    // 缓存头部校验和
+
+    ip->hdr_checksum = 0; 
+    uint16_t checkans = checksum16((uint16_t *)ip, 20);    // 计算得到的校验和
+
+    ip->hdr_checksum = swap16(check);      // 恢复
+
+    // 下面去掉IP头部之前，先获得源IP
+    uint8_t src_IP[NET_IP_LEN];
+    memcpy(src_IP, ip->src_ip, NET_IP_LEN);
+
+    if(checkans == check){
+        // 校验和一致
+        if(memcmp(ip->dest_ip, net_if_ip, NET_IP_LEN) == 0){
+            // 是本机的IP报
+            if(ip->protocol == NET_PROTOCOL_ICMP){   // 1个字节
+                buf_remove_header(buf, IP_HDR_LEN_PER_BYTE * (ip->hdr_len));     // 4*  !!!
+                    
+                icmp_in(buf, src_IP);    // 通过接收的包的头部，可以得知：源IP
+
+            }else if(ip->protocol == NET_PROTOCOL_UDP){
+                buf_remove_header(buf, IP_HDR_LEN_PER_BYTE * (ip->hdr_len)); 
+   
+                udp_in(buf, src_IP);    // 通过接收的包的头部，可以得知：源IP
+
+            }else{
+                
+                icmp_unreachable(buf, src_IP, ICMP_CODE_PROTOCOL_UNREACH);    // 协议不可达
+            }
+            
+        }else{
+            ;  // 不处理该数据报
+        }
+        
+    }else{
+        ;   // 不处理该数据报
+    }
+
 }
 
 /**
@@ -44,6 +91,34 @@ void ip_in(buf_t *buf)
 void ip_fragment_out(buf_t *buf, uint8_t *ip, net_protocol_t protocol, int id, uint16_t offset, int mf)
 {
     // TODO
+    buf_add_header(buf, 20);
+
+    ip_hdr_t * iptr = (ip_hdr_t *)buf->data;
+    iptr->version = IP_VERSION_4;
+    iptr->hdr_len = 5;
+    iptr->tos = 0;
+    iptr->total_len = swap16(buf->len);     // 大小端
+    iptr->id = swap16(id);                 // 大小端！！！
+
+    // 标志第2位：未考虑
+    if(mf == 1){
+        iptr->flags_fragment = offset | IP_MORE_FRAGMENT;
+    }else{
+        iptr->flags_fragment = offset;
+    }
+
+    iptr->ttl = IP_DEFALUT_TTL;
+
+    /// 还要填充源IP和目的IP！ 先填充完全，才计算checksum
+    memcpy(iptr->dest_ip, ip, NET_IP_LEN);
+    memcpy(iptr->src_ip, net_if_ip, NET_IP_LEN);
+
+    iptr->protocol = protocol;
+    iptr->hdr_checksum = 0;
+
+    iptr->hdr_checksum = swap16(checksum16((uint16_t *)iptr, 20));       // 打印出来看着正着的(即大端)数据，其实存的都是反的(即小端)
+
+    arp_out(buf, ip, NET_PROTOCOL_IP);        // 传入的protocol应该是IP！
     
 }
 
@@ -63,10 +138,39 @@ void ip_fragment_out(buf_t *buf, uint8_t *ip, net_protocol_t protocol, int id, u
  * 
  * @param buf 要处理的包
  * @param ip 目标ip地址
- * @param protocol 上层协议
+ * @param protocol 上层协议             // 我：用于分解这个包，往上层送；而分片，所填的协议，要和原报一样
  */
+
+#define pac_len 1480           // ip包头长度定长20, 则 数据max长度 1500-20=1480
+int g_id = 0;         // 全局id号，以0开始，并未随机初始化
+
 void ip_out(buf_t *buf, uint8_t *ip, net_protocol_t protocol)
 {
     // TODO 
-    
+    uint16_t len = buf->len;         // 16位  
+
+    if(len > pac_len){       
+        int num = 0;      // 第num个包，offset应该为：1480*num/8
+        do{                                                                         // 非最后一个分片
+            buf_init(&txbuf, pac_len);
+            memcpy(txbuf.payload, buf->payload, pac_len);
+            buf->data += pac_len;
+            len -= pac_len;
+
+            ip_fragment_out(&txbuf, ip, protocol, g_id, pac_len*num/8, 1);     // 分片完成，去加IP头
+
+            num++;
+
+        }while(len > 1480);
+                                                                                    // 最后一个分片
+        buf_init(&txbuf, len);
+        memcpy(txbuf.payload, buf->payload, len);     // 数据部分，有待ip_fragment_out为其添加IP头部
+
+        ip_fragment_out(&txbuf, ip, protocol, g_id, pac_len*num/8, 0);
+    }else{
+        // 不用分片，直接发出
+        ip_fragment_out(buf, ip, protocol, g_id, 0, 0);
+    }
+
+    g_id++;    // 全局id ++ ，完成了一个数据报
 }

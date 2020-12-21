@@ -17,7 +17,28 @@
 void ethernet_in(buf_t *buf)
 {
     // TODO
-    
+
+    uint8_t *p = (buf->data) + 2 * NET_MAC_LEN;  // p指向 2B类型，收到的包：大端存储
+    // printf("p[0] = %02x\n", p[0]);
+    // printf("p[1] = %02x\n", p[1]);
+    uint16_t *x = (uint16_t *) p;        // 指针强转，大读，则变成小端存储
+    uint16_t value = *x;
+    // printf("value = %04x\n", value);
+
+    value = swap16(value);
+    // printf("after swap16 : value = %04x\n\n",value);
+
+
+    if(value == 0x0806){     // ARP
+        buf_remove_header(buf, 2*NET_MAC_LEN+2);
+        arp_in(buf);
+
+    }else if(value == 0x0800){  // IP
+        buf_remove_header(buf, 2*NET_MAC_LEN+2);
+        ip_in(buf);
+    }else{
+        ;
+    }
 }
 
 /**
@@ -32,7 +53,35 @@ void ethernet_in(buf_t *buf)
 void ethernet_out(buf_t *buf, const uint8_t *mac, net_protocol_t protocol)
 {
     // TODO
+    uint8_t *p = NULL;
 
+    buf_add_header(buf, 2+2*NET_MAC_LEN);
+    p = buf->data;
+    
+    memcpy(p, mac, NET_MAC_LEN);
+    p += NET_MAC_LEN;
+    
+
+    uint8_t arr[6] = DRIVER_IF_MAC;
+    memcpy(p, arr, NET_MAC_LEN);
+    p += NET_MAC_LEN;
+
+    
+    uint16_t *pro = (uint16_t *)p;
+
+    // printf("\nprotocol = %04x\n", protocol);     // 0806
+    *pro = protocol;        // 同等类型，直接赋值，实际：小端存储
+    // printf("*pro = %04x\n", *pro);             //0806
+
+    // printf("p[0] = %02x\n", p[0]);             //06
+    // printf("p[1] = %02x\n\n", p[1]);          //08
+    *pro = swap16(*pro);                 // 要转一下
+    // printf("*pro = %04x\n", *pro);             //0608
+
+    // printf("p[0] = %02x\n", p[0]);             //08
+    // printf("p[1] = %02x\n\n", p[1]);          //06
+    
+    driver_send(buf);
 }
 
 /**
